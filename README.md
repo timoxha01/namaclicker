@@ -1,2 +1,2 @@
 # namaclicker
-AHHH
+Fucking B[boink]CH PARTY!
