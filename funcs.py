@@ -55,9 +55,9 @@ def draw_button_text(screen, text, font, color, button, offset):
     screen.blit(text_surface, (x, y))
 
 def add_clicks():
-    vars.total_clicks = int(vars.total_clicks)
     boost_bonus = vars.buffm.get_boost_bonus() if vars.buffm else 0
-    vars.total_clicks += 1 * (vars.boost + boost_bonus)
+    click_multiplier = vars.buffm.get_click_multiplier() if vars.buffm else 1.0
+    vars.total_clicks = max(0.0, float(vars.total_clicks) + ((vars.boost + boost_bonus) * click_multiplier))
     vars.show_boost = True
     vars.clicking_text_timer.reset()
     vars.tama_on_screen = choose_tama(vars.tamas)

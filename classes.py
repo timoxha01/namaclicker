@@ -54,6 +54,10 @@ class Timer:
     def time_left(self):
         return max(0, self.duration - (pygame.time.get_ticks() - self.start))
 
+    def set_remaining_ms(self, remaining_ms):
+        remaining_ms = max(0, min(int(self.duration), int(remaining_ms)))
+        self.start = pygame.time.get_ticks() - (int(self.duration) - remaining_ms)
+
     def time_format(self):
         total_sec = self.time_left() // 1000
         minutes = total_sec // 60
@@ -398,10 +402,10 @@ class Background:
 
 class BuffMachine:
     EFFECTS = {
-        "buff1": ("x1.1 кликов каждые 10 секунд на протяжении минуты!", "buff", 60000, 10000, 1.1, "clicks"),
+        "buff1": ("x1.5 кликов на 1 минуту!", "buff", 60000, 0, 1.5, "click_multiplier"),
         "buff2": ("Буст увеличивается на 2 на 10 секунд!", "buff", 10000, 0, 2, "boost_bonus"),
         "buff3": ("x3 NamaCoins на ферме!", "buff", 60000, 0, 3, "farm_coins"),
-        "debuff1": ("-10 кликов каждые 3 секунды на протяжении 30 секунд!", "debuff", 30000, 3000, -10, "clicks"),
+        "debuff1": ("-10 кликов каждые 3 секунды на протяжении 30 секунд!", "debuff", 30000, 3000, -10, "periodic_clicks"),
         "debuff2": ("В NamaPass к текущему оставшемуся времени добавляется 30 секунд!", "debuff", 0, 0, 30000, "namapass_delay"),
         "debuff3": ("NamaCoins делятся на 2", "debuff", 0, 0, 0, "halve_coins"),
     }
@@ -415,7 +419,14 @@ class BuffMachine:
         self.active_effect_tick_timer = None
         self.active_effect_tick_value = 0
 
+    def clear_active_effect(self):
+        self.active_effect_id = None
+        self.active_effect_timer = None
+        self.active_effect_tick_timer = None
+        self.active_effect_tick_value = 0
+
     def shuffle(self):
+        self.clear_active_effect()
         self.active_effect_id = random.choice(list(self.EFFECTS.keys()))
         text, etype, duration_ms, tick_ms, tick_val, _ = self.EFFECTS[self.active_effect_id]
         self.shuffle_result = text
@@ -446,30 +457,29 @@ class BuffMachine:
                 for name in ["namapass_5min_timer", "namapass_10min_timer", "namapass_15min_timer",
                             "namapass_20min_timer", "namapass_25min_timer", "namapass_30min_timer"]:
                     t = ctx.get(name)
-                    if t is not None and hasattr(t, "duration"):
+                    if t is not None and hasattr(t, "duration") and not t.done():
                         t.duration += tick_val
             elif effect_type == "halve_coins":
                 ctx["NamaCoins"] = max(0, ctx["NamaCoins"] // 2)
-            self.active_effect_id = None
+            self.clear_active_effect()
 
     def update_timed_effects(self, ctx):
         """Обновляет эффекты с таймером (buff1, buff2, buff3, debuff1)."""
         if self.active_effect_id is None or self.active_effect_timer is None:
             return
-        if self.active_effect_timer.done():
-            self.active_effect_id = None
-            self.active_effect_timer = None
-            self.active_effect_tick_timer = None
-            self.active_effect_tick_value = 0
-            return
 
         _, _, _, _, _, effect_type = self.EFFECTS[self.active_effect_id]
-        if self.active_effect_tick_timer is not None and self.active_effect_tick_timer.done():
+        while self.active_effect_tick_timer is not None and self.active_effect_tick_timer.done():
             self.active_effect_tick_timer.reset()
-            if effect_type == "clicks":
-                ctx["total_clicks"] = max(0, round(float(ctx["total_clicks"]) + self.active_effect_tick_value))
+            if effect_type == "periodic_clicks":
+                ctx["total_clicks"] = max(0.0, float(ctx["total_clicks"]) + self.active_effect_tick_value)
             elif effect_type == "boost_bonus":
-                pass  # обрабатывается в add_clicks через buff_boost_bonus
+                pass
+            else:
+                break
+
+        if self.active_effect_timer.done():
+            self.clear_active_effect()
 
     def get_boost_bonus(self):
         if self.active_effect_id is None:
@@ -487,6 +497,51 @@ class BuffMachine:
             mult = int(self.active_effect_tick_value)
             return max(1, mult)
         return 1
+
+    def get_click_multiplier(self):
+        if self.active_effect_id is None:
+            return 1.0
+        _, _, _, _, _, effect_type = self.EFFECTS[self.active_effect_id]
+        if effect_type == "click_multiplier":
+            return max(1.0, float(self.active_effect_tick_value))
+        return 1.0
+
+    def serialize_state(self):
+        effect_data = {
+            "last_result_text": self.last_result_text,
+            "last_effect_kind": self.last_effect_kind,
+            "active_effect_id": self.active_effect_id,
+            "active_effect_tick_value": self.active_effect_tick_value,
+        }
+        if self.active_effect_timer is not None:
+            effect_data["active_effect_timer_remaining_ms"] = self.active_effect_timer.time_left()
+        if self.active_effect_tick_timer is not None:
+            effect_data["active_effect_tick_timer_remaining_ms"] = self.active_effect_tick_timer.time_left()
+        return effect_data
+
+    def restore_state(self, data):
+        self.clear_active_effect()
+        if not isinstance(data, dict):
+            return
+
+        self.last_result_text = data.get("last_result_text")
+        self.last_effect_kind = data.get("last_effect_kind")
+        effect_id = data.get("active_effect_id")
+
+        if effect_id not in self.EFFECTS:
+            return
+
+        _, _, duration_ms, tick_ms, tick_val, _ = self.EFFECTS[effect_id]
+        self.active_effect_id = effect_id
+        self.active_effect_tick_value = data.get("active_effect_tick_value", tick_val)
+
+        if duration_ms > 0:
+            self.active_effect_timer = Timer(duration_ms)
+            self.active_effect_timer.set_remaining_ms(data.get("active_effect_timer_remaining_ms", duration_ms))
+
+        if tick_ms > 0:
+            self.active_effect_tick_timer = Timer(tick_ms)
+            self.active_effect_tick_timer.set_remaining_ms(data.get("active_effect_tick_timer_remaining_ms", tick_ms))
 
 
 class NamaPlayer():

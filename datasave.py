@@ -44,6 +44,10 @@ class SaveSystem:
             return
 
         remaining_ms = int(max(0, min(duration, int(remaining_ms))))
+        if hasattr(timer, "set_remaining_ms"):
+            timer.set_remaining_ms(remaining_ms)
+            return
+
         now = self.pygame.time.get_ticks()
         elapsed_ms = duration - remaining_ms
         timer.start = now - int(elapsed_ms)
@@ -76,6 +80,8 @@ class SaveSystem:
         course = ctx.get("course")
         course_coins = getattr(course, "course_coins", 0.0) if course is not None else 0.0
         course_clicks = getattr(course, "course_clicks", 0.0) if course is not None else 0.0
+        buffm = ctx.get("buffm")
+        buffm_state = buffm.serialize_state() if buffm is not None and hasattr(buffm, "serialize_state") else {}
 
         def _equipped_bg_key() -> str | None:
             for key in ["seoul_bg", "kyoto_bg", "bernal_bg"]:
@@ -91,7 +97,7 @@ class SaveSystem:
                 "VOLUME_SDTRACK": self._safe_float(ctx.get("VOLUME_SDTRACK", 0.5), 0.5),
             },
             "progress": {
-                "total_clicks": self._safe_int(ctx.get("total_clicks", 0), 0),
+                "total_clicks": self._safe_float(ctx.get("total_clicks", 0), 0.0),
                 "NamaCoins": self._safe_int(ctx.get("NamaCoins", 0), 0),
                 "boost": self._safe_int(ctx.get("boost", 1), 1),
                 "required_clicks_for_boost": self._safe_int(ctx.get("required_clicks_for_boost", 100), 100),
@@ -149,6 +155,10 @@ class SaveSystem:
                 },
                 "course_timer_remaining_ms": _t("course_timer"),
             },
+            "buff_machine": {
+                "intermission_timer_remaining_ms": _t("buffm_intermission_timer"),
+                "effect": buffm_state,
+            },
             "ui_flags": {
                 "notif_5_shown": bool(ctx.get("notif_5_shown", False)),
                 "notif_10_shown": bool(ctx.get("notif_10_shown", False)),
@@ -156,6 +166,7 @@ class SaveSystem:
                 "notif_20_shown": bool(ctx.get("notif_20_shown", False)),
                 "notif_25_shown": bool(ctx.get("notif_25_shown", False)),
                 "notif_30_shown": bool(ctx.get("notif_30_shown", False)),
+                "show_buff_effect_end_notice": bool(ctx.get("show_buff_effect_end_notice", False)),
             },
         }
 
@@ -174,7 +185,7 @@ class SaveSystem:
             pass
 
         progress = data.get("progress", {}) if isinstance(data.get("progress", {}), dict) else {}
-        ctx["total_clicks"] = max(0, self._safe_int(progress.get("total_clicks", ctx.get("total_clicks", 0)), 0))
+        ctx["total_clicks"] = max(0.0, self._safe_float(progress.get("total_clicks", ctx.get("total_clicks", 0)), 0.0))
         ctx["NamaCoins"] = max(0, self._safe_int(progress.get("NamaCoins", ctx.get("NamaCoins", 0)), 0))
         ctx["boost"] = max(1, self._safe_int(progress.get("boost", ctx.get("boost", 1)), 1))
         ctx["required_clicks_for_boost"] = max(
@@ -300,8 +311,30 @@ class SaveSystem:
         if course_timer is not None:
             self._timer_set_remaining_ms(course_timer, self._safe_int(exchange.get("course_timer_remaining_ms", self._timer_remaining_ms(course_timer))))
 
+        buff_machine = data.get("buff_machine", {}) if isinstance(data.get("buff_machine", {}), dict) else {}
+        buffm_intermission_timer = ctx.get("buffm_intermission_timer")
+        if buffm_intermission_timer is not None:
+            self._timer_set_remaining_ms(
+                buffm_intermission_timer,
+                self._safe_int(
+                    buff_machine.get("intermission_timer_remaining_ms", self._timer_remaining_ms(buffm_intermission_timer))
+                ),
+            )
+
+        buffm = ctx.get("buffm")
+        if buffm is not None and hasattr(buffm, "restore_state"):
+            buffm.restore_state(buff_machine.get("effect", {}))
+
         ui_flags = data.get("ui_flags", {}) if isinstance(data.get("ui_flags", {}), dict) else {}
-        for flag in ["notif_5_shown", "notif_10_shown", "notif_15_shown", "notif_20_shown", "notif_25_shown", "notif_30_shown"]:
+        for flag in [
+            "notif_5_shown",
+            "notif_10_shown",
+            "notif_15_shown",
+            "notif_20_shown",
+            "notif_25_shown",
+            "notif_30_shown",
+            "show_buff_effect_end_notice",
+        ]:
             if flag in ui_flags:
                 ctx[flag] = bool(ui_flags.get(flag, ctx.get(flag, False)))
 
